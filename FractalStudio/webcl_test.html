@@ -1,0 +1,232 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="ISO-8859-1">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=0" />
+
+<title>Fractured | WebCL Test</title>
+
+<script type="text/javascript" src="webcl.js"></script>
+<script type="text/javascript">
+var fractal;
+function runTest() {
+  drawGradient(document.getElementById('gradient'));
+  fractal = new Fractal('body');
+  fractal.init();             //Create a default fractal
+  fractal.rebuild();
+  fractal.draw(2);
+}
+
+function debug(str) {
+  console.log(str);
+}
+
+//Complex number type
+/**
+ * @constructor
+ */
+function Complex(real, imag) {
+  if (typeof(real) == 'string')
+    this.re = parseReal(real);
+  else
+    this.re = real;
+
+  if (typeof(imag) == 'string')
+    this.im = parseReal(imag);
+  else
+    this.im = imag;
+}
+
+Complex.prototype.toString = function() {
+  return "(" + this.re + "," + this.im + ")";
+}
+
+Complex.prototype.set = function(pos) {
+  if (typeof pos == 'string')
+    pos = parseComplex(pos);
+  this.re = pos.re;
+  this.im = pos.im;
+}
+
+/**
+ * @constructor
+ */
+function Aspect(re, im, rotation, zoom) {
+  // call base class constructor
+  Complex.call(this, re, im); 
+  this.rotate = rotation;
+  this.zoom = zoom; 
+}
+
+//Inherits from Complex
+Aspect.prototype = new Complex();
+Aspect.prototype.constructor = Aspect;
+
+Aspect.prototype.print = function() {
+  return this.re + ',' + this.im + ',' + this.rotate + ',' + this.zoom;
+}
+
+Aspect.prototype.toString = function() {
+  return "origin=(" + this.re + "," + this.im + ")\n" + 
+         "zoom=" + this.zoom + "\n" + 
+         "rotate=" + this.rotate + "\n";
+}
+
+Aspect.prototype.clone = function() {
+  return new Aspect(this.re, this.im, this.rotate, this.zoom);
+}
+
+//Returns size of a pixel at current zoom level
+Aspect.prototype.pixelSize = function(element) {
+  var unit = 2.0 / this.zoom;
+  var pixel = unit / element.width; //height?
+  //debug(element.width + " x " + element.height + " ==> " + size[0] + " x " + size[1]);
+  //if (this.zoom > 100) debug("Warning, precision too low, pixel size: " + pixel);
+  return pixel;
+//    return new Array(pwidth,pheight);
+}
+
+//Palette draw to canvas
+drawGradient = function(canvas) {
+  if (!canvas) {alert("Invalid canvas!"); return;}
+
+  if (canvas.getContext) {
+    //Draw the gradient(s)
+    var width = canvas.width;
+    var height = canvas.height;
+    var context = canvas.getContext('2d');  
+    context.clearRect(0, 0, width, height);
+
+      //Single gradient
+      context.fillStyle = context.createLinearGradient(0, 0, width, 0);
+        context.fillStyle.addColorStop(0, "#000000");
+        context.fillStyle.addColorStop(1, "#ffffff");
+      context.fillRect(0, 0, width, height);
+
+  } else alert("getContext failed!");
+}
+
+/**
+ * @constructor
+ */
+function Viewport(x, y, width, height) {
+  this.x = x; 
+  this.y = y; 
+  this.width = width; 
+  this.height = height; 
+}
+
+function readURL(url) {
+  //Read url (synchronous)
+  var http = new XMLHttpRequest();
+  http.open('GET', url, false);
+  http.overrideMimeType('text/plain; charset=x-user-defined');
+  http.send(null);
+  if (http.status != 200  && http.status != 0) return '';
+  return http.responseText;
+}
+
+/**
+ * @constructor
+ */
+function Fractal(parentid) {
+  this.source = readURL("generated.cl");
+  //Construct a new default fractal object
+  this.setRenderer(parentid);
+
+  this.antialias = 1;
+  this.preview = null;
+}
+
+Fractal.prototype.init = function() {
+  //Set the default fractal options
+  this.resetDefaults();
+}
+
+Fractal.prototype.setRenderer = function(parentid) {
+  //Create new canvas
+  this.canvas = document.createElement("canvas");
+  this.canvas.id = "fractal-canvas"
+  this.canvas.width = this.canvas.height = 600;
+
+  //Remove existing canvas if any
+  var pelement = document.getElementById(parentid)
+  var ccanvas = document.getElementById("fractal-canvas");
+  if (ccanvas) pelement.removeChild(ccanvas);
+  pelement.appendChild(this.canvas);
+
+  //Init WebCL
+  try {
+    this.webcl = new OpenCL(this.platform, this.device);  //Use existing settings
+
+    /*if (this.renderer > WEBCL && !this.webcl.fp64) {
+      popup("Sorry, the <b><i>cl_khr_fp64</i></b> or the <b><i>cl_amd_fp64</i></b> " + 
+            "extension is required for double precision support in WebCL");
+      this.renderer = WEBCL;
+    }*/
+
+    this.webcl.init(this.canvas, false, 8);
+    this.webcl.populateDevices(document.getElementById("webcl_list"));
+    this.webgl = null;
+  } catch(e) {
+    //WebCL init failed
+    var error = e;
+    if (e.message) error = e.message;
+    alert(error);
+  }
+}
+
+//Fractal.prototype.webclSet = function(pfid, devid) {
+Fractal.prototype.webclSet = function(valstr) {
+  var val = JSON.parse(valstr);
+  this.platform = val.pfid;
+  this.device = val.devid;
+  fractal.setRenderer('body');
+  fractal.rebuild();
+  fractal.draw();
+}
+
+Fractal.prototype.resetDefaults = function() {
+  this.width = 600;
+  this.height = 600;
+  this.position = new Aspect(0, 0, 0, 0.5); 
+  this.savePos = new Aspect(0, 0, 0, 0.5);
+  this.selected = new Complex(0, 0);
+  this.julia = false;
+  this.iterations = 100;
+
+  this.canvas.style.width = this.width + "px";
+  this.canvas.style.height = this.height + "px";
+  this.canvas.width = this.width;
+  this.canvas.height = this.height;
+  //Update WebCL buffer when size changed
+  this.webcl.setViewport(0, 0, this.width, this.height);
+}
+
+Fractal.prototype.rebuild = function(notime) {
+  try {
+    this.webcl.buildProgram(this.source);
+  } catch (e) {
+    alert(e)
+  }
+}
+
+Fractal.prototype.draw = function(antialias) {
+  if (!antialias) antialias = this.antialias;
+
+  var background = {};
+  background.red = background.green = background.blue = 0;
+  background.alpha = 0.0;
+  this.webcl.draw(this, this.antialias, background);
+}
+
+</script>
+
+</head>
+
+<body onload="runTest();" id="body">
+<select id="webcl_list" style="width: 100%; font-size: 9pt;" onchange="fractal.webclSet(this.value);">
+</select>
+<canvas id="gradient" width="2048" height="1"></canvas>
+</body>
+</html>
